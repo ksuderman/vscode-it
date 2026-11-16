@@ -12,7 +12,7 @@ OPENVSCODE_VERSION="${OPENVSCODE_VERSION:-1.105.1}"
 # Bump the suffix whenever the image changes without the editor version changing.
 # Tags are never reused: the tool definition pins one, and a moved tag would be
 # invisible to nodes that already pulled it (k8s_pull_policy: IfNotPresent).
-TAG="${TAG:-${OPENVSCODE_VERSION}-6}"
+TAG="${TAG:-${OPENVSCODE_VERSION}-7}"
 
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${TAG}"
 
@@ -23,6 +23,7 @@ echo ""
 
 docker build --platform linux/amd64 \
     --build-arg OPENVSCODE_VERSION="${OPENVSCODE_VERSION}" \
+    --build-arg IMAGE_REF="${FULL_IMAGE}" \
     -t "${FULL_IMAGE}" .
 
 echo ""

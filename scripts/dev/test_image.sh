@@ -42,9 +42,12 @@ echo "== image: $IMG"
 docker inspect "$IMG" --format 'Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}} User={{.Config.User}}' || exit 1
 
 echo "== 1. a command passed to docker run must execute (not be swallowed)"
-out=$(docker run --rm $P "$IMG" /bin/sh -c 'echo COMMAND-RAN; for c in python3 R gcloud micromamba conda-pack; do command -v $c; done | wc -l')
+out=$(docker run --rm $P "$IMG" /bin/sh -c 'echo COMMAND-RAN; for c in python3 R gcloud micromamba conda-pack batch; do command -v $c; done | wc -l')
 check "command ran" "$(echo "$out" | head -1)" COMMAND-RAN
-check "python3, R, gcloud, micromamba, conda-pack on PATH" "$(echo "$out" | tail -1 | tr -d ' ')" 5
+check "python3, R, gcloud, micromamba, conda-pack, batch on PATH" "$(echo "$out" | tail -1 | tr -d ' ')" 6
+out=$(docker run --rm $P -e GALAXY_BATCH_BUCKET=gs://b -e GALAXY_BATCH_PROJECT=p -e GALAXY_BATCH_REGION=r "$IMG" \
+    /bin/sh -c 'batch run --dry-run --cpus 2 Rscript x.R | grep -c -e "\"imageUri\": \"$GALAXY_VSCODE_IMAGE\"" -e "\"cpuMilli\": 2000"')
+check "batch run --dry-run uses this image and the requested CPUs" "$out" 2
 out=$(docker run --rm $P "$IMG" python3 -c 'import bioblend, ipykernel, numpy, pandas, scipy, sklearn, matplotlib, seaborn; print("IMPORTS-OK")' 2>&1 | tail -1)
 check "python data stack imports" "$out" IMPORTS-OK
 

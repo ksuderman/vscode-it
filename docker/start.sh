@@ -154,11 +154,71 @@ with `gcloud auth list`.
 
 ## Run an analysis here, or send it to Batch
 
-Your terminal, scripts and notebook kernels run inside the IT container and
-share its CPU and memory. The supplied configuration requests **1 CPU and
-4 GB RAM**, although your Galaxy deployment may provide different resources.
-Keep small analyses here; for larger work, you can send a job to Google Cloud
-Batch and continue editing while it runs on a separate VM.
+Your terminal, scripts and notebook kernels run inside this session and share
+its CPU and memory (1 CPU and 4 GB RAM in the supplied configuration; your
+Galaxy may differ). Keep small analyses here. For larger work, `batch` sends a
+command to Google Cloud Batch, where it runs on a separate VM while you keep
+working.
+
+Batch compute is billed to the Google Cloud project separately. It needs a
+bucket that this session can write to: name it in the "Google Cloud Storage
+bucket for Batch jobs" box when launching the tool, or pass `--bucket`.
+
+### Example: summarize a table
+
+Take a table from your history, with gene IDs in the first column and numeric
+gene lengths in the second, and save this script as `analyze.R`:
+
+```r
+x <- read.delim("input.tsv")
+result <- data.frame(genes = nrow(x), mean_length = mean(x[[2]]))
+write.table(result, "result.tsv", sep = "\t", row.names = FALSE)
+```
+
+Then:
+
+```bash
+galaxy-get gene-length.tabular input.tsv
+batch run --input input.tsv Rscript analyze.R
+batch status            # repeat, or use: batch status --wait
+batch fetch --put
+```
+
+`batch run` uploads `analyze.R` and `input.tsv` and runs the command in a
+directory that holds them, so the script uses the same relative paths on Batch
+as it does here. `batch fetch` copies whatever the command wrote, here
+`result.tsv`, into `outputs/`, and `--put` also adds it to your history.
+`batch logs` shows what the command printed.
+
+### More CPUs, another image
+
+```bash
+batch run --cpus 2 --memory 8 --image bioconductor/bioconductor_docker:RELEASE_3_22 \
+    --input input.tsv Rscript analyze.R
+```
+
+More CPUs help only when the code uses parallel workers or threads, for example
+`BiocParallel::MulticoreParam(workers = 2)`. By default the job runs in the same
+image as this session, so it has the software listed above but NOT packages,
+extensions or conda environments you installed during the session. Use
+`--image` for a container that has what the job needs.
+
+### Good to know
+
+- `batch --help` lists every option, including `--time` (the limit is 60
+  minutes unless you raise it), `--machine-type` and `--dry-run`.
+- Job files stay in the bucket under `galaxy-vscode/batch/<job>/` until you
+  delete them.
+- `batch status`, `batch logs` and `batch fetch` act on the job you submitted
+  last; give a job name for an earlier one. `batch list` shows this session's
+  jobs.
+- The project, region and service account default to those of the VM Galaxy
+  runs on. `batch --help` shows how to override them.
+
+## Submitting a Batch job by hand
+
+`batch` writes a job configuration and runs `gcloud` for you. This section does
+the same thing by hand, for when you need a setting `batch` does not offer.
 
 The examples below take a table from your Galaxy history, process it on Batch,
 and bring the result back. Batch compute is billed separately. You will need a

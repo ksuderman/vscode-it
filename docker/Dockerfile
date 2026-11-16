@@ -19,6 +19,7 @@
 #   - the Python, Jupyter and R extensions, pre-installed from Open VSX
 #   - start.sh, which sets up HOME, the workspace README, the server flags, and
 #     the galaxy-get / galaxy-put helpers
+#   - batch, which sends a command to Google Cloud Batch and fetches its results
 #
 # Galaxy runs the pod/container as the Galaxy job uid with the tool command as
 # its script, so everything the tool needs at runtime must be world-readable, and
@@ -100,9 +101,15 @@ RUN chmod -R a+rX /opt/galaxy-vscode
 
 ENV PATH=/opt/galaxy-vscode/bin:${PATH}
 
+# The name this image is published under, so that `batch run` can start Batch
+# workers from the same image by default. docker/build.sh passes it.
+ARG IMAGE_REF=""
+ENV GALAXY_VSCODE_IMAGE=${IMAGE_REF}
+
 # Sanity checks: fail the build rather than the first IT launch.
 RUN python3 -c "import bioblend, ipykernel, numpy, pandas, scipy, sklearn, matplotlib, seaborn" \
     && conda-pack --version >/dev/null \
+    && batch --help >/dev/null \
     && gcloud --version >/dev/null \
     && micromamba --version >/dev/null \
     && [ "$(command -v python3)" = /usr/bin/python3 ] \

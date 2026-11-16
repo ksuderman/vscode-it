@@ -29,6 +29,9 @@
         <environment_variable name="GALAXY_URL">$__galaxy_url__</environment_variable>
         <environment_variable name="API_KEY" inject="api_key" />
         <environment_variable name="HISTORY_ID">$__history_id__</environment_variable>
+        <!-- Where the `batch` helper stages Google Cloud Batch jobs. Empty unless
+             the user names a bucket on the form. -->
+        <environment_variable name="GALAXY_BATCH_BUCKET">$bucket</environment_variable>
     </environment_variables>
     <!-- The tool command IS the launch (the image has no ENTRYPOINT). The container
          runs as Galaxy's job uid, not the image's user, so start.sh points HOME and
@@ -52,6 +55,11 @@
         <param name="inputs" type="data" format="data" multiple="true" optional="true"
                label="Datasets to make available in the workspace"
                help="Linked read-only under workspace/inputs/. Save anything you want back in Galaxy under workspace/outputs/."/>
+        <param name="bucket" type="text" optional="true" value=""
+               label="Google Cloud Storage bucket for Batch jobs"
+               help="Optional. Only needed to send work to Google Cloud Batch with the batch command; job files are kept under galaxy-vscode/batch/ in this bucket. Give the bucket name, with or without gs://.">
+            <validator type="regex" message="Enter a bucket name such as my-bucket or gs://my-bucket">^$|^(gs://)?[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]/?$</validator>
+        </param>
     </inputs>
     <outputs>
         <collection name="outputs" type="list" label="VS Code outputs">
@@ -69,7 +77,8 @@ The integrated terminal has ``python3`` with ``bioblend``, ``R`` with the langua
 server and an IRkernel for notebooks, ``micromamba`` for conda packages, ``git``
 and the Google Cloud CLI. ``GALAXY_URL``, ``API_KEY`` and
 ``HISTORY_ID`` are set, and ``galaxy-get <dataset>`` / ``galaxy-put <file>`` move
-data between the history and the workspace. The workspace ``README.md`` has the
-details.
+data between the history and the workspace. ``batch run <command>`` sends a
+command to Google Cloud Batch, using the bucket named on this form. The
+workspace ``README.md`` has the details.
     ]]></help>
 </tool>
