@@ -101,7 +101,7 @@ extraFileMappings:
                languageserver/IRkernel, micromamba, the Google Cloud CLI, the Python,
                Jupyter and R extensions, start.sh and the galaxy-get/galaxy-put helpers. -->
           <requirements>
-              <container type="docker">ksuderman/galaxy-vscode:1.105.1-6</container>
+              <container type="docker">ksuderman/galaxy-vscode:1.105.1-7</container>
           </requirements>
           <entry_points>
               <!-- Path-based or domain-based, see scripts/render_helm.py --mode.

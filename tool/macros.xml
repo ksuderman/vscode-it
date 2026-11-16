@@ -3,7 +3,7 @@
          interactivetool_vscode.xml needs to change. install.sh sets them for you. -->
 
     <!-- The image built from ../docker. Pin a tag; never move one. -->
-    <token name="@CONTAINER@">ksuderman/galaxy-vscode:1.105.1-6</token>
+    <token name="@CONTAINER@">ksuderman/galaxy-vscode:1.105.1-7</token>
     <token name="@TOOL_VERSION@">1.105.1</token>
 
     <!-- How Galaxy publishes the running IDE.

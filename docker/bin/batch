@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""Run a command on Google Cloud Batch and bring the results back.
+
+Usage: batch run [options] [--] <command> [<argument> ...]
+       batch status [--wait] [<job>]
+       batch logs [<job>]
+       batch fetch [--put] [--all] [--to DIR] [<job>]
+       batch list
+
+run     Uploads the files the command needs to a job folder in the bucket,
+        submits the job and prints its name. Arguments that name existing files
+        (the "analyze.R" in "Rscript analyze.R") are uploaded automatically; name
+        anything else with --input. On the worker the command runs in a
+        directory that holds those files, so relative paths work the same way
+        there as here. Whatever the command writes to that directory is a result.
+status  State of a job. --wait blocks until it has finished.
+logs    What the command printed.
+fetch   Copies the results into workspace/outputs/ (or --to DIR). --put also
+        adds them to the Galaxy history. --all includes the uploaded inputs.
+list    Jobs submitted from this session.
+
+<job> defaults to the job most recently submitted from this session.
+
+Options for run:
+  --cpus N              CPUs for the job (default 1)
+  --memory GB           memory in GB (default 4)
+  --time MINUTES        time limit (default 60)
+  --image IMAGE         container image (default: the image this session runs)
+  --input PATH          extra file or directory to upload; repeatable
+  --name JOB            job name (default vscode-<timestamp>)
+  --machine-type TYPE   pin a machine type instead of letting Batch choose
+  --wait                block until the job has finished
+  --dry-run             print the job configuration, upload and submit nothing
+
+Settings, each with an option for run and an environment variable:
+  --bucket            GALAXY_BATCH_BUCKET           required; the tool form sets it
+  --project           GALAXY_BATCH_PROJECT          default: this VM's project
+  --region            GALAXY_BATCH_REGION           default: this VM's region
+  --service-account   GALAXY_BATCH_SERVICE_ACCOUNT  default: this VM's service account
+  --network           GALAXY_BATCH_NETWORK          default: the project's default network
+  --subnet            GALAXY_BATCH_SUBNET
+
+Batch compute is billed to the project separately from this session.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+FOLDER = "galaxy-vscode/batch"
+MANIFEST = ".batch-manifest.json"
+FINISHED = ("SUCCEEDED", "FAILED", "CANCELLED", "DELETION_IN_PROGRESS")
+STATE_DIR = os.path.join(os.environ.get("HOME", "."), ".galaxy-batch")
+
+
+def fail(message):
+    print(f"batch: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def metadata(path):
+    """A value from the GCE metadata server, or None when there is none."""
+    request = urllib.request.Request(
+        f"http://metadata.google.internal/computeMetadata/v1/{path}", headers={"Metadata-Flavor": "Google"})
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.read().decode().strip()
+    except OSError:
+        return None
+
+
+def gcloud(*args, capture=False):
+    result = subprocess.run(["gcloud", *args], text=True, stdout=subprocess.PIPE if capture else None)
+    if result.returncode != 0:
+        fail(f"gcloud {args[0]} {args[1]} failed")
+    return result.stdout.strip() if capture else None
+
+
+def setting(args, name, lookup=None):
+    value = getattr(args, name, None) or os.environ.get(f"GALAXY_BATCH_{name.upper()}")
+    if not value and lookup:
+        value = lookup()
+    return value
+
+
+def region_from_zone():
+    zone = metadata("instance/zone")  # projects/<number>/zones/us-east4-c
+    return zone.rsplit("/", 1)[-1].rsplit("-", 1)[0] if zone else None
+
+
+# Session state: one file per job, so status/logs/fetch need no arguments.
+
+def remember(job):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(os.path.join(STATE_DIR, f"{job['name']}.json"), "w") as handle:
+        json.dump(job, handle, indent=2)
+    with open(os.path.join(STATE_DIR, "last"), "w") as handle:
+        handle.write(job["name"])
+
+
+def recall(name):
+    if not name:
+        try:
+            with open(os.path.join(STATE_DIR, "last")) as handle:
+                name = handle.read().strip()
+        except OSError:
+            fail("no job has been submitted from this session; name one")
+    try:
+        with open(os.path.join(STATE_DIR, f"{name}.json")) as handle:
+            return json.load(handle)
+    except OSError:
+        pass
+    # A job from an earlier session: rebuild what is needed from the settings.
+    empty = argparse.Namespace()
+    bucket = clean_bucket(setting(empty, "bucket"))
+    project = setting(empty, "project", lambda: metadata("project/project-id"))
+    region = setting(empty, "region", region_from_zone)
+    if not (bucket and project and region):
+        fail(f"job {name} was not submitted from this session; set GALAXY_BATCH_BUCKET, "
+             "GALAXY_BATCH_PROJECT and GALAXY_BATCH_REGION to find it")
+    return {"name": name, "bucket": bucket, "project": project, "region": region}
+
+
+def clean_bucket(bucket):
+    if not bucket:
+        return bucket
+    bucket = bucket.strip()
+    if bucket.startswith("gs://"):
+        bucket = bucket[5:]
+    return bucket.strip("/")
+
+
+def job_url(job):
+    return f"gs://{job['bucket']}/{FOLDER}/{job['name']}"
+
+
+def state(job):
+    return gcloud("batch", "jobs", "describe", job["name"], "--location", job["region"],
+                  "--project", job["project"], "--format", "value(status.state)", capture=True)
+
+
+def wait(job):
+    last = None
+    while True:
+        current = state(job)
+        if current != last:
+            print(f"{job['name']}: {current}", flush=True)
+            last = current
+        if current in FINISHED:
+            return 0 if current == "SUCCEEDED" else 1
+        time.sleep(15)
+
+
+def run(argv):
+    parser = argparse.ArgumentParser(prog="batch run", add_help=False)
+    parser.add_argument("--cpus", type=float, default=1)
+    parser.add_argument("--memory", type=float, default=4)
+    parser.add_argument("--time", type=int, default=60)
+    parser.add_argument("--image", default=os.environ.get("GALAXY_VSCODE_IMAGE"))
+    parser.add_argument("--input", action="append", default=[])
+    parser.add_argument("--name")
+    parser.add_argument("--machine-type")
+    parser.add_argument("--wait", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    for name in ("bucket", "project", "region", "service-account", "network", "subnet"):
+        parser.add_argument(f"--{name}")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        fail("nothing to run; see batch --help")
+    if not args.image:
+        fail("no container image; pass --image")
+    if args.cpus <= 0 or args.memory <= 0 or args.time <= 0:
+        fail("--cpus, --memory and --time must be positive")
+
+    bucket = clean_bucket(setting(args, "bucket"))
+    if not bucket:
+        fail("no bucket; fill in the bucket on the tool form, set GALAXY_BATCH_BUCKET or pass --bucket")
+    project = setting(args, "project", lambda: metadata("project/project-id"))
+    region = setting(args, "region", region_from_zone)
+    if not project or not region:
+        fail("cannot work out the project and region here; pass --project and --region")
+    account = setting(args, "service_account", lambda: metadata("instance/service-accounts/default/email"))
+    network = setting(args, "network")
+    subnet = setting(args, "subnet")
+
+    name = args.name or f"vscode-{time.strftime('%Y%m%d-%H%M%S')}"
+    if not re.fullmatch(r"[a-z]([a-z0-9-]{0,61}[a-z0-9])?", name):
+        fail(f"'{name}' is not a valid job name: lower case letters, digits and hyphens, starting with a letter")
+
+    # Files named on the command line travel with the job, under their own names.
+    uploads = {}
+    remote_command = command[:1]
+    for word in command[1:]:
+        if os.path.isfile(word):
+            uploads[os.path.basename(word)] = word
+            remote_command.append(os.path.basename(word))
+        else:
+            remote_command.append(word)
+    for path in args.input:
+        if not os.path.exists(path):
+            fail(f"--input {path}: no such file or directory")
+        base = os.path.basename(os.path.normpath(path))
+        if uploads.get(base, path) != path:
+            fail(f"two inputs are both named {base}; rename one")
+        uploads[base] = path
+
+    job = {"name": name, "bucket": bucket, "project": project, "region": region, "inputs": sorted(uploads)}
+    allocation = {"location": {"allowedLocations": [f"regions/{region}"]}}
+    if account:
+        allocation["serviceAccount"] = {"email": account}
+    if args.machine_type:
+        allocation["instances"] = [{"policy": {"machineType": args.machine_type}}]
+    if network or subnet:
+        interface = {}
+        if network:
+            interface["network"] = network
+        if subnet:
+            interface["subnetwork"] = subnet
+        allocation["network"] = {"networkInterfaces": [interface]}
+    config = {
+        "taskGroups": [{"taskCount": 1, "taskSpec": {
+            "runnables": [{"container": {
+                "imageUri": args.image,
+                "entrypoint": remote_command[0],
+                "commands": remote_command[1:],
+                "volumes": ["/mnt/disks/job:/work"],
+                "options": "--workdir /work",
+            }}],
+            "computeResource": {"cpuMilli": int(args.cpus * 1000), "memoryMib": int(args.memory * 1024)},
+            "maxRunDuration": f"{args.time * 60}s",
+            "maxRetryCount": 0,
+            "volumes": [{"gcs": {"remotePath": f"{bucket}/{FOLDER}/{name}"}, "mountPath": "/mnt/disks/job"}],
+        }}],
+        "allocationPolicy": allocation,
+        "logsPolicy": {"destination": "CLOUD_LOGGING"},
+        "labels": {"source": "galaxy-vscode"},
+    }
+
+    if args.dry_run:
+        print(f"# would upload to {job_url(job)}/: {', '.join(sorted(uploads)) or 'nothing'}")
+        print(json.dumps(config, indent=2))
+        return 0
+
+    with tempfile.TemporaryDirectory() as scratch:
+        manifest = os.path.join(scratch, MANIFEST)
+        with open(manifest, "w") as handle:
+            json.dump({"inputs": sorted(uploads), "command": remote_command}, handle)
+        files = [p for p in uploads.values() if os.path.isfile(p)]
+        folders = [p for p in uploads.values() if os.path.isdir(p)]
+        gcloud("storage", "cp", manifest, *files, f"{job_url(job)}/", "--project", project)
+        for folder in folders:
+            gcloud("storage", "cp", "--recursive", folder, f"{job_url(job)}/", "--project", project)
+        config_file = os.path.join(scratch, "job.json")
+        with open(config_file, "w") as handle:
+            json.dump(config, handle)
+        gcloud("batch", "jobs", "submit", name, "--location", region, "--project", project,
+               "--config", config_file, "--format", "none")
+    remember(job)
+    print(f"submitted {name}")
+    print("check it with: batch status      collect results with: batch fetch")
+    return wait(job) if args.wait else 0
+
+
+def status(argv):
+    parser = argparse.ArgumentParser(prog="batch status", add_help=False)
+    parser.add_argument("--wait", action="store_true")
+    parser.add_argument("job", nargs="?")
+    args = parser.parse_args(argv)
+    job = recall(args.job)
+    if args.wait:
+        return wait(job)
+    print(f"{job['name']}: {state(job)}")
+    return 0
+
+
+def logs(argv):
+    parser = argparse.ArgumentParser(prog="batch logs", add_help=False)
+    parser.add_argument("job", nargs="?")
+    args = parser.parse_args(argv)
+    job = recall(args.job)
+    uid = gcloud("batch", "jobs", "describe", job["name"], "--location", job["region"],
+                 "--project", job["project"], "--format", "value(uid)", capture=True)
+    gcloud("logging", "read",
+           f'logName="projects/{job["project"]}/logs/batch_task_logs" AND labels.job_uid="{uid}"',
+           "--project", job["project"], "--order", "asc", "--format", "value(textPayload)")
+    return 0
+
+
+def fetch(argv):
+    parser = argparse.ArgumentParser(prog="batch fetch", add_help=False)
+    parser.add_argument("--put", action="store_true")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--to")
+    parser.add_argument("job", nargs="?")
+    args = parser.parse_args(argv)
+    job = recall(args.job)
+    destination = args.to or os.path.join(os.path.dirname(os.environ.get("HOME", "")), "workspace", "outputs")
+    if not args.to and not os.path.isdir(destination):
+        destination = "."
+
+    prefix = f"{job_url(job)}/"
+    listing = gcloud("storage", "ls", "--recursive", prefix, "--project", job["project"], capture=True)
+    objects = [line[len(prefix):] for line in listing.splitlines()
+               if line.startswith(prefix) and not line.endswith((":", "/"))]
+    inputs = job.get("inputs")
+    if inputs is None and MANIFEST in objects:
+        text = gcloud("storage", "cat", prefix + MANIFEST, "--project", job["project"], capture=True)
+        inputs = json.loads(text).get("inputs", [])
+    skip = set() if args.all else set(inputs or [])
+    wanted = [o for o in objects if o != MANIFEST and o.split("/", 1)[0] not in skip]
+    if not wanted:
+        print(f"{job['name']} has no results yet ({state(job)})")
+        return 1
+
+    fetched = []
+    for name in wanted:
+        target = os.path.join(destination, name)
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        gcloud("storage", "cp", prefix + name, target, "--project", job["project"], "--no-user-output-enabled")
+        print(target)
+        fetched.append(target)
+    if args.put:
+        return subprocess.run(["galaxy-put", *fetched]).returncode
+    return 0
+
+
+def list_jobs(argv):
+    try:
+        names = sorted(f[:-5] for f in os.listdir(STATE_DIR) if f.endswith(".json"))
+    except OSError:
+        names = []
+    if not names:
+        print("no jobs submitted from this session")
+    for name in names:
+        print(f"{name}: {state(recall(name))}")
+    return 0
+
+
+COMMANDS = {"run": run, "status": status, "logs": logs, "fetch": fetch, "list": list_jobs}
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0 if len(argv) > 1 else 2
+    if argv[1] not in COMMANDS:
+        fail(f"unknown command '{argv[1]}'; expected one of: {', '.join(COMMANDS)}")
+    if any(a in ("-h", "--help") for a in argv[2:3]):
+        print(__doc__.strip())
+        return 0
+    return COMMANDS[argv[1]](argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
