@@ -57,8 +57,9 @@ EOF
 fi
 
 # Orientation for the user. Written once; a user who edits it keeps the edits.
+# The delimiter is not EOF because the text itself shows a heredoc ending in EOF.
 if [[ ! -e "$WORKSPACE/README.md" ]]; then
-    cat > "$WORKSPACE/README.md" <<'EOF'
+    cat > "$WORKSPACE/README.md" <<'WORKSPACE_README'
 # Galaxy VS Code workspace
 
 Galaxy started this VS Code session as an Interactive Tool. It runs inside your
@@ -150,7 +151,123 @@ be kept in the history with `galaxy-put work.tar.gz` and fetched with
 VM that Galaxy runs on. On Terra that is the workspace pet service account, so
 `gcloud storage ls gs://<workspace bucket>` works without logging in. Check
 with `gcloud auth list`.
+
+## Run an analysis here, or send it to Batch
+
+Your terminal, scripts and notebook kernels run inside the IT container and
+share its CPU and memory. The supplied configuration requests **1 CPU and
+4 GB RAM**, although your Galaxy deployment may provide different resources.
+Keep small analyses here; for larger work, you can send a job to Google Cloud
+Batch and continue editing while it runs on a separate VM.
+
+The examples below take a table from your Galaxy history, process it on Batch,
+and bring the result back. Batch compute is billed separately. You will need a
+Google Cloud project with Batch enabled, a job service account you can use, and
+a bucket accessible to both your terminal identity and that service account.
+Check the current identity and project with `gcloud auth list` and
+`gcloud config get-value project`.
+
+### Example 1: summarize a table on Batch
+
+Choose a table with gene IDs in the first column and numeric gene lengths in
+the second. Replace `gene-length.tabular` with its name or number in your history,
+and fill in your bucket name and job service-account email:
+
+```bash
+galaxy-get gene-length.tabular input.tsv
+BUCKET=YOUR_BUCKET
+SERVICE_ACCOUNT=YOUR_JOB_SERVICE_ACCOUNT
+REGION=us-east4
+JOB=vscode-$(date +%s)
+STAGING="gs://$BUCKET/$JOB"
+```
+
+Save this short script as `analyze.R`:
+
+```r
+x <- read.delim("/data/input.tsv")
+result <- data.frame(genes = nrow(x), mean_length = mean(x[[2]]))
+write.table(result, "/data/result.tsv", sep = "\t", row.names = FALSE)
+```
+
+Batch cannot see files in the IT directly. Copy the input and script to your
+bucket; the job below mounts that folder at `/data` in its R container:
+
+```bash
+gcloud storage cp input.tsv analyze.R "$STAGING/"
+cat > job.json <<EOF
+{
+  "taskGroups": [{"taskCount": 1, "taskSpec": {
+    "runnables": [{"container": {
+      "imageUri": "bioconductor/bioconductor_docker:RELEASE_3_22",
+      "entrypoint": "Rscript", "commands": ["/data/analyze.R"],
+      "volumes": ["/mnt/data:/data"]
+    }}],
+    "computeResource": {"cpuMilli": 1000, "memoryMib": 1024},
+    "maxRunDuration": "900s", "maxRetryCount": 0,
+    "volumes": [{"gcs": {"remotePath": "$BUCKET/$JOB"}, "mountPath": "/mnt/data"}]
+  }}],
+  "allocationPolicy": {
+    "instances": [{"policy": {"machineType": "e2-standard-2"}}],
+    "serviceAccount": {"email": "$SERVICE_ACCOUNT"},
+    "location": {"allowedLocations": ["regions/$REGION"]}
+  },
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}
 EOF
+gcloud batch jobs submit "$JOB" --location="$REGION" --config=job.json
+gcloud batch jobs describe "$JOB" --location="$REGION" --format='value(status.state)'
+```
+
+Run the last command again to check progress. When it reports `SUCCEEDED`, your
+result is in the bucket. Download it into the IT and add it to your history:
+
+```bash
+gcloud storage cp "$STAGING/result.tsv" outputs/result.tsv
+galaxy-put outputs/result.tsv
+```
+
+### Example 2: use two Bioconductor workers
+
+Reuse the staged input, but replace `analyze.R` with this version. It splits the
+gene lengths into two chunks and summarizes them with `BiocParallel`:
+
+```r
+if (!requireNamespace("BiocParallel", quietly = TRUE))
+    BiocManager::install("BiocParallel", ask = FALSE, update = FALSE)
+library(BiocParallel)
+x <- read.delim("/data/input.tsv")
+chunks <- split(x[[2]], rep(1:2, length.out = nrow(x)))
+result <- bplapply(chunks, function(z) c(genes = length(z), mean_length = mean(z)),
+                  BPPARAM = MulticoreParam(workers = 2))
+write.table(do.call(rbind, result), "/data/result-parallel.tsv",
+            sep = "\t", col.names = NA)
+```
+
+In `job.json`, change `cpuMilli` to `2000` (two CPUs) and `memoryMib` to `4096`
+(4 GiB). Upload the revised script and submit with a new job name, keeping the
+same staging folder:
+
+```bash
+gcloud storage cp analyze.R "$STAGING/"
+JOB=vscode-parallel-$(date +%s)
+gcloud batch jobs submit "$JOB" --location="$REGION" --config=job.json
+gcloud batch jobs describe "$JOB" --location="$REGION" --format='value(status.state)'
+# Once SUCCEEDED:
+gcloud storage cp "$STAGING/result-parallel.tsv" outputs/result-parallel.tsv
+galaxy-put outputs/result-parallel.tsv
+```
+
+More CPUs help when your code uses parallel workers or threads. This small
+example shows the setup; parallel overhead may outweigh any speedup for a small
+table. For random workloads, pin the generator and seed for reproducible results.
+Batch uses the chosen container's software, so packages installed in the IT are
+not carried over.
+
+Files written under `/data` stay in the bucket. Other worker-local files do not
+automatically return to the IT; logs go to Cloud Logging. Keep the bucket copies
+you need and remove temporary inputs and results when finished.
+WORKSPACE_README
 fi
 
 # The proxy (gx-it-proxy or a Kubernetes Ingress) forwards the request path
