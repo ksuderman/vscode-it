@@ -37,8 +37,8 @@ Settings, each with an option for run and an environment variable:
   --project           GALAXY_BATCH_PROJECT          default: this VM's project
   --region            GALAXY_BATCH_REGION           default: this VM's region
   --service-account   GALAXY_BATCH_SERVICE_ACCOUNT  default: this VM's service account
-  --network           GALAXY_BATCH_NETWORK          default: the project's default network
-  --subnet            GALAXY_BATCH_SUBNET
+  --network           GALAXY_BATCH_NETWORK          default: this VM's network
+  --subnet            GALAXY_BATCH_SUBNET           default: this VM's subnet, where known
 
 Batch compute is billed to the project separately from this session.
 """
@@ -94,6 +94,35 @@ def region_from_zone():
     return zone.rsplit("/", 1)[-1].rsplit("-", 1)[0] if zone else None
 
 
+def vm_network(project, region):
+    """The network and subnet of the VM this session runs on, as Batch wants them.
+
+    Batch puts workers on the project's "default" network unless told otherwise,
+    and many projects (every Terra workspace) do not have one. Terra records the
+    names in the instance attributes gcp-network and gcp-subnet; elsewhere the
+    network comes from the VM's interface and the subnet is left to Batch, which
+    is enough for an auto-mode network.
+    """
+    network = metadata("instance/attributes/gcp-network")
+    subnet = metadata("instance/attributes/gcp-subnet")
+    if not network:
+        interface = metadata("instance/network-interfaces/0/network")  # projects/<number>/networks/<name>
+        network = interface.rsplit("/", 1)[-1] if interface else None
+    return network, subnet
+
+
+def network_path(value, project):
+    if not value or "/" in value:
+        return value
+    return f"projects/{project}/global/networks/{value}"
+
+
+def subnet_path(value, project, region):
+    if not value or "/" in value:
+        return value
+    return f"projects/{project}/regions/{region}/subnetworks/{value}"
+
+
 # Session state: one file per job, so status/logs/fetch need no arguments.
 
 def remember(job):
@@ -145,6 +174,19 @@ def state(job):
                   "--project", job["project"], "--format", "value(status.state)", capture=True)
 
 
+def explain(job):
+    """Print what Batch recorded about a job that did not succeed."""
+    text = gcloud("batch", "jobs", "describe", job["name"], "--location", job["region"],
+                  "--project", job["project"], "--format", "json(status.statusEvents)", capture=True)
+    events = (json.loads(text or "{}").get("status") or {}).get("statusEvents") or []
+    reasons = [e.get("description", "") for e in events if e.get("type") != "STATUS_CHANGED"]
+    if not reasons:
+        reasons = [e.get("description", "") for e in events[-2:]]
+    for reason in reasons:
+        print(f"  {' '.join(reason.split())}")
+    print("  the command's own output, if it got that far: batch logs")
+
+
 def wait(job):
     last = None
     while True:
@@ -153,6 +195,8 @@ def wait(job):
             print(f"{job['name']}: {current}", flush=True)
             last = current
         if current in FINISHED:
+            if current != "SUCCEEDED":
+                explain(job)
             return 0 if current == "SUCCEEDED" else 1
         time.sleep(15)
 
@@ -191,6 +235,10 @@ def run(argv):
     account = setting(args, "service_account", lambda: metadata("instance/service-accounts/default/email"))
     network = setting(args, "network")
     subnet = setting(args, "subnet")
+    if not network and not subnet:
+        network, subnet = vm_network(project, region)
+    network = network_path(network, project)
+    subnet = subnet_path(subnet, project, region)
 
     name = args.name or f"vscode-{time.strftime('%Y%m%d-%H%M%S')}"
     if not re.fullmatch(r"[a-z]([a-z0-9-]{0,61}[a-z0-9])?", name):
@@ -278,7 +326,10 @@ def status(argv):
     job = recall(args.job)
     if args.wait:
         return wait(job)
-    print(f"{job['name']}: {state(job)}")
+    current = state(job)
+    print(f"{job['name']}: {current}")
+    if current == "FAILED":
+        explain(job)
     return 0
 
 
@@ -329,7 +380,9 @@ def fetch(argv):
         print(target)
         fetched.append(target)
     if args.put:
-        return subprocess.run(["galaxy-put", *fetched]).returncode
+        if subprocess.run(["galaxy-put", *fetched]).returncode != 0:
+            print(f"batch: the results are in {destination} but were not added to the history", file=sys.stderr)
+            return 1
     return 0
 
 

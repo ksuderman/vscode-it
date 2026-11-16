@@ -13,6 +13,7 @@ Uses GALAXY_URL, API_KEY and HISTORY_ID, which Galaxy sets for the session.
 import os
 import sys
 
+from bioblend import ConnectionError
 from bioblend.galaxy import GalaxyInstance
 
 
@@ -61,4 +62,12 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except ConnectionError as e:
+        # Typically GALAXY_URL is Galaxy's public address and that address does not
+        # accept API keys from here (behind Terra it only admits browser sessions).
+        detail = str(e).split(": {", 1)[0][:300]
+        fail(f"Galaxy at {os.environ.get('GALAXY_URL')} refused the request: {detail}\n"
+             "If that address is not reachable from this session, the Galaxy administrator needs to set\n"
+             "galaxy_infrastructure_url for interactive tools to an address inside the cluster.")
