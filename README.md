@@ -51,7 +51,7 @@ Nothing installs them for you.
 `--tool-path` is Galaxy's `tool_path`, usually `<galaxy root>/tools`. The
 installer writes `<tool-path>/interactive/vscode/` and prints the remaining
 steps. Add `--container IMAGE` to use an image other than the default
-`ksuderman/galaxy-vscode:1.105.1-8`.
+`ksuderman/galaxy-vscode:1.105.1-9`.
 
 To install by hand, copy `tool/` to that directory and edit the tokens in
 `macros.xml`:
@@ -139,6 +139,36 @@ configuration alone and use that file in place of the overlay:
 
 After changing the overlay on a running deployment, restart the web, job and
 workflow deployments. Mounted tool files are not picked up live.
+
+## Running on a multi-user Galaxy
+
+A session is a shell: the terminal, tasks, notebooks and extensions all run
+whatever the user likes, as the Galaxy job uid, inside the container. Nothing in
+the tool or the image can narrow that. What a user can reach is decided by the
+job destination, so that is where a shared server is locked down.
+
+What the image does:
+
+- It has no `sudo` and no setuid or setgid programs (from `1.105.1-9`), so there
+  is no way to become root in the container, whatever uid Galaxy runs it as.
+- It runs with every Linux capability dropped and `no-new-privileges` set.
+
+What the administrator needs to do:
+
+| Risk | Control |
+|---|---|
+| Anyone with an account gets a shell | Limit the tool to a Galaxy role: the `require_role` rule in `config/tpv_rules.yml`. |
+| Other users' datasets | The usual destinations mount Galaxy's whole file store (Docker `$defaults`, the Kubernetes data volume), and the session can read whatever the job uid can. Use a destination that stages only the job's own files, such as Pulsar with file staging. |
+| Escape to the node | Docker: `docker_run_extra_arguments` in `config/job_conf.yml`. Kubernetes: run as non-root with `allowPrivilegeEscalation: false`, all capabilities dropped and the `RuntimeDefault` seccomp profile. |
+| The node's cloud identity | On a cloud VM the metadata server (`169.254.169.254`) hands the node's service account to any process. Block it for job containers unless every user is meant to have it; `gcloud` and `batch` then stop working, which is what you want on a shared server. |
+| Galaxy's internal services | Let job containers reach Galaxy's web endpoint and the internet, and nothing else on the cluster or host network (database, message queue, other sessions). |
+| Another user's session | The server has no login of its own; Galaxy's proxy is the gate. Anything else that can reach the container's port 3000 gets the session and its API key, so only the proxy may be allowed to connect: firewall the published ports on Docker hosts, and use a NetworkPolicy on Kubernetes. |
+| Resource abuse | CPU and memory in the destination, a walltime limit, and a per-user limit on concurrent jobs at the interactive destination. |
+
+The session is given the user's own Galaxy API key (`API_KEY`), as other
+interactive tools are. It grants nothing the user does not already have, but it
+is written to the job directory, which is one more reason job directories must
+not be readable across users.
 
 ## Using it
 
@@ -429,7 +459,7 @@ pulled a tag will not see it change. Then pass the image to `install.sh
 both modes. To try the image by hand:
 
     docker run --rm -e EP_PATH=/galaxy/interactivetool/ep/1/t -w /jobdir -v $PWD:/jobdir \
-        --user 10001:10001 -p 3000:3000 ksuderman/galaxy-vscode:1.105.1-8
+        --user 10001:10001 -p 3000:3000 ksuderman/galaxy-vscode:1.105.1-9
     # open http://localhost:3000/galaxy/interactivetool/ep/1/t/
     # domain mode: -e EP_PATH=/ and open http://localhost:3000/
 

@@ -50,6 +50,13 @@ execution:
       # the job working directory so no HOME or TMPDIR needs to be passed in.
       docker_set_user: ""
       require_container: true
+      # Multi-user servers: no capabilities and no privilege gain through setuid
+      # programs (the image ships none), and a ceiling on processes. The image
+      # is tested under these flags (scripts/dev/test_image.sh).
+      docker_run_extra_arguments: --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=2048
+      # `$defaults` mounts Galaxy's whole file store into the container, so a
+      # session can read every user's datasets that the job uid can read. See
+      # "Running on a multi-user Galaxy" in README.md before using it there.
       # With Pulsar: container_monitor_result: callback
 
     # Kubernetes: the destination galaxy-helm creates, plus the IT runner settings

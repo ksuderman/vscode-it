@@ -9,6 +9,10 @@ IMG=${1:-$(sed -n 's|.*@CONTAINER@">\([^<]*\)<.*|\1|p' "$HERE/../../tool/macros.
 S=$(mktemp -d)
 P="--platform linux/amd64"
 PORT=${PORT:-3300}
+# The restrictions config/job_conf.yml recommends for a multi-user server. The
+# sessions below run under them, so a change that needs a capability or a
+# setuid helper fails here first.
+HARDEN="--cap-drop=ALL --security-opt=no-new-privileges"
 FAILED=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1 ($2)"; else echo "FAIL $1: got '$2', wanted '$3'"; FAILED=1; fi; }
 wait_for() { # url -> last http code, after up to 60s
@@ -30,7 +34,7 @@ $1
 export GALAXY_URL=http://example.invalid/galaxy API_KEY=fake HISTORY_ID=abc
 mkdir -p workspace/inputs && ln -sf /jobdir/inputs/dataset_1.dat 'workspace/inputs/regions.bed' && exec /opt/galaxy-vscode/start.sh
 TS
-    CID=$(docker run -d $P --user 10001:10001 -w /jobdir -v "$JOB:/jobdir" -p "$PORT:3000" "$IMG" /bin/sh /jobdir/tool_script.sh)
+    CID=$(docker run -d $P $HARDEN --user 10001:10001 -w /jobdir -v "$JOB:/jobdir" -p "$PORT:3000" "$IMG" /bin/sh /jobdir/tool_script.sh)
 }
 finish() {
     docker logs "$CID" 2>&1 | grep -i "error\|denied" | head -3
@@ -50,6 +54,10 @@ out=$(docker run --rm $P -e GALAXY_BATCH_BUCKET=gs://b -e GALAXY_BATCH_PROJECT=p
 check "batch run --dry-run uses this image and the requested CPUs" "$out" 2
 out=$(docker run --rm $P "$IMG" python3 -c 'import bioblend, ipykernel, numpy, pandas, scipy, sklearn, matplotlib, seaborn; print("IMPORTS-OK")' 2>&1 | tail -1)
 check "python data stack imports" "$out" IMPORTS-OK
+
+echo "== 1b. no route to root, including for uid 1000 (the base image's sudo user)"
+out=$(docker run --rm $P --user 1000:1000 "$IMG" /bin/sh -c 'command -v sudo; find / -xdev -type f -perm /6000 2>/dev/null; echo END' | tr '\n' ' ')
+check "no sudo, no setuid or setgid files" "$out" "END "
 
 echo "== 2. path mode: EP_PATH as Galaxy injects it (no trailing slash)"
 launch 'export EP_PATH=/galaxy/its/ep/1/tok'

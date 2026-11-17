@@ -95,6 +95,17 @@ RUN mkdir -p "${GALAXY_VSCODE_EXTENSIONS}" \
     && rm -rf /tmp/build-server-data /tmp/build-user-data \
     && chmod -R a+rwX "${GALAXY_VSCODE_EXTENSIONS}"
 
+# No way to become root inside the container. The base image gives its own user
+# (uid 1000) passwordless sudo, and Galaxy runs the container as the Galaxy job
+# uid, which is 1000 on many servers: a user would then be root in the container
+# and on every volume mounted into it. Remove sudo and clear the setuid and
+# setgid bits on everything else (su, mount, passwd and friends), which nothing
+# in a session needs.
+# SUDO_FORCE_REMOVE: the package refuses to go while root has no password.
+RUN SUDO_FORCE_REMOVE=yes apt-get purge -y sudo \
+    && rm -rf /etc/sudoers /etc/sudoers.d /var/lib/apt/lists/* \
+    && find / -xdev -type f -perm /6000 -exec chmod a-s {} +
+
 COPY start.sh /opt/galaxy-vscode/start.sh
 COPY bin/ /opt/galaxy-vscode/bin/
 RUN chmod -R a+rX /opt/galaxy-vscode
@@ -113,6 +124,8 @@ RUN python3 -c "import bioblend, ipykernel, numpy, pandas, scipy, sklearn, matpl
     && gcloud --version >/dev/null \
     && micromamba --version >/dev/null \
     && [ "$(command -v python3)" = /usr/bin/python3 ] \
+    && ! command -v sudo >/dev/null \
+    && [ -z "$(find / -xdev -type f -perm /6000)" ] \
     && Rscript -e 'library(languageserver); library(IRkernel); library(httpgd)' \
     && /home/.openvscode-server/bin/openvscode-server --extensions-dir "${GALAXY_VSCODE_EXTENSIONS}" --list-extensions | grep -q ms-python.python \
     && /home/.openvscode-server/bin/openvscode-server --extensions-dir "${GALAXY_VSCODE_EXTENSIONS}" --list-extensions | grep -qi reditorsupport.r

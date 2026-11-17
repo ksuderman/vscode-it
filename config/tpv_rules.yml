@@ -23,3 +23,8 @@ tools:
       - id: require_login
         if: user is None
         fail: An account is required to run this tool. Please log in or create an account.
+      # Multi-user servers: a session is a shell, so limit it to people you have
+      # given a Galaxy role (Admin > Roles), here one named "interactive-tools".
+      # - id: require_role
+      #   if: user is not None and 'interactive-tools' not in [r.name for r in user.all_roles() if not r.deleted]
+      #   fail: Your account is not enabled for interactive tools. Contact the administrators of this Galaxy.
