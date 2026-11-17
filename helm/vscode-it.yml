@@ -101,7 +101,7 @@ extraFileMappings:
                languageserver/IRkernel, micromamba, the Google Cloud CLI, the Python,
                Jupyter and R extensions, start.sh and the galaxy-get/galaxy-put helpers. -->
           <requirements>
-              <container type="docker">ksuderman/galaxy-vscode:1.105.1-9</container>
+              <container type="docker">ksuderman/galaxy-vscode:1.105.1-10</container>
           </requirements>
           <entry_points>
               <!-- Path-based or domain-based, see scripts/render_helm.py --mode.
@@ -153,7 +153,7 @@ extraFileMappings:
                      help="Linked read-only under workspace/inputs/. Save anything you want back in Galaxy under workspace/outputs/."/>
               <param name="bucket" type="text" optional="true" value=""
                      label="Google Cloud Storage bucket for Batch jobs"
-                     help="Optional. Only needed to send work to Google Cloud Batch with the batch command; job files are kept under galaxy-vscode/batch/ in this bucket. Give the bucket name, with or without gs://.">
+                     help="Optional, and only for Galaxy servers running on Google Cloud. Needed to send work to Google Cloud Batch with the batch command; job files are kept under galaxy-vscode/batch/ in this bucket. Give the bucket name, with or without gs://.">
                   <validator type="regex" message="Enter a bucket name such as my-bucket or gs://my-bucket">^$|^(gs://)?[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]/?$</validator>
               </param>
           </inputs>

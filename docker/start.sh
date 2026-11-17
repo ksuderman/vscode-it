@@ -56,6 +56,14 @@ if [[ ! -e "$HOME/data/User/settings.json" ]]; then
 EOF
 fi
 
+# True on a Google Cloud VM, where gcloud and batch get the VM's service account
+# from the metadata server. Anywhere else those sections of the README would
+# describe things that fail.
+on_google_cloud() {
+    curl -sf --connect-timeout 2 -m 4 -o /dev/null -H 'Metadata-Flavor: Google' \
+        http://metadata.google.internal/computeMetadata/v1/project/project-id
+}
+
 # Orientation for the user. Written once; a user who edits it keeps the edits.
 # The delimiter is not EOF because the text itself shows a heredoc ending in EOF.
 if [[ ! -e "$WORKSPACE/README.md" ]]; then
@@ -145,12 +153,33 @@ environment, which was built under a different directory. An archive can also
 be kept in the history with `galaxy-put work.tar.gz` and fetched with
 `galaxy-get`.
 
+WORKSPACE_README
+    if ! on_google_cloud; then
+        cat >> "$WORKSPACE/README.md" <<'WORKSPACE_README'
+## Google Cloud
+
+This Galaxy does not run on Google Cloud, so `gcloud` and `gsutil` have no
+account until you sign in with your own: `gcloud auth login`. The `batch`
+command and the bucket box on the tool form are for Galaxy servers on Google
+Cloud and do nothing useful here.
+
+If you sign in, run `gcloud auth revoke` before you stop the tool. Your Google
+credentials are saved in this session's files, which stay on the Galaxy server
+for a while after the session ends.
+WORKSPACE_README
+    else
+        cat >> "$WORKSPACE/README.md" <<'WORKSPACE_README'
 ## Google Cloud
 
 `gcloud` and `gsutil` authenticate automatically as the service account of the
 VM that Galaxy runs on. On Terra that is the workspace pet service account, so
 `gcloud storage ls gs://<workspace bucket>` works without logging in. Check
 with `gcloud auth list`.
+
+If you sign in as yourself instead (`gcloud auth login`), run
+`gcloud auth revoke` before you stop the tool. Your Google credentials are
+saved in this session's files, which stay on the Galaxy server for a while
+after the session ends.
 
 ## Run an analysis here, or send it to Batch
 
@@ -328,6 +357,7 @@ Files written under `/data` stay in the bucket. Other worker-local files do not
 automatically return to the IT; logs go to Cloud Logging. Keep the bucket copies
 you need and remove temporary inputs and results when finished.
 WORKSPACE_README
+    fi
 fi
 
 # The proxy (gx-it-proxy or a Kubernetes Ingress) forwards the request path

@@ -33,6 +33,9 @@ def expand(mode: str) -> str:
         '    <expand macro="requirements"/>',
         "    <requirements>\n        <container type=\"docker\">@CONTAINER@</container>\n    </requirements>",
     )
+    # The overlay is a single text file and cannot carry the icon image.
+    xml, dropped = re.subn(r"\n    <!--[^>]*?-->\n    <icon [^>]*/>", "", xml)
+    assert dropped == 1, "icon element not found"
     # Comments that only make sense beside macros.xml, before the tokens go.
     xml = xml.replace("see @REQUIRES_DOMAIN@ in macros.xml", "see scripts/render_helm.py --mode")
     xml = xml.replace("(see config/tpv_rules.yml)", "(the TPV rule below)")

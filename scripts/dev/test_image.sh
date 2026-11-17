@@ -66,6 +66,7 @@ check "GET /galaxy/its/ep/1/tok/" "$(wait_for "http://localhost:$PORT/galaxy/its
 check "GET /other (outside the base path)" "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/other")" 404
 check "input link" "$(readlink "$JOB/workspace/inputs/regions.bed")" /jobdir/inputs/dataset_1.dat
 check "workspace README written" "$(ls "$JOB/workspace/README.md" > /dev/null 2>&1 && echo yes)" yes
+check "README leaves out Batch off Google Cloud" "$(grep -c -e 'send it to Batch' -e 'gcloud auth revoke' "$JOB/workspace/README.md" | tr -d ' ')" 1
 check "settings.json written" "$(ls "$JOB/home/data/User/settings.json" > /dev/null 2>&1 && echo yes)" yes
 finish
 

@@ -40,7 +40,7 @@ fi
 
 dest="$tool_path/interactive/vscode"
 mkdir -p "$dest"
-cp "$here/tool/interactivetool_vscode.xml" "$dest/"
+cp "$here/tool/interactivetool_vscode.xml" "$here/tool/vscode.png" "$dest/"
 sed -e "s|<token name=\"@REQUIRES_DOMAIN@\">[^<]*</token>|<token name=\"@REQUIRES_DOMAIN@\">$requires_domain</token>|" \
     "$here/tool/macros.xml" > "$dest/macros.xml"
 if [[ -n "$container" ]]; then

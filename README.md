@@ -28,7 +28,7 @@ The same image serves both.
 
 | Path | What it is |
 |---|---|
-| `tool/` | The tool: `interactivetool_vscode.xml` and `macros.xml`, which holds every setting |
+| `tool/` | The tool: `interactivetool_vscode.xml`, `macros.xml`, which holds every setting, and the icon |
 | `install.sh` | Copies `tool/` into a Galaxy tool directory with the mode and image set |
 | `config/galaxy.yml` | The `interactivetools_*` settings for each mode |
 | `config/job_conf.yml` | Docker and Kubernetes destinations that can run interactive tools |
@@ -51,7 +51,7 @@ Nothing installs them for you.
 `--tool-path` is Galaxy's `tool_path`, usually `<galaxy root>/tools`. The
 installer writes `<tool-path>/interactive/vscode/` and prints the remaining
 steps. Add `--container IMAGE` to use an image other than the default
-`ksuderman/galaxy-vscode:1.105.1-9`.
+`ksuderman/galaxy-vscode:1.105.1-10`.
 
 To install by hand, copy `tool/` to that directory and edit the tokens in
 `macros.xml`:
@@ -215,7 +215,11 @@ or an exact dataset name. `bioblend` is installed for anything else.
 - `batch`, to run a command on Google Cloud Batch (see below).
 - `git`, `git-lfs`, `curl`, `jq`, `nano`, `unzip`.
 - `gcloud` and `gsutil`. On a Google Cloud VM they authenticate as the VM's
-  service account with no login.
+  service account with no login. Elsewhere they work only after
+  `gcloud auth login` with your own account; run `gcloud auth revoke` before
+  stopping the tool, because the credentials are saved in the job directory. The
+  workspace README leaves out the Batch sections when the session is not on
+  Google Cloud.
 - The Python, Jupyter and R extensions. More can be installed from the
   Extensions view, which uses the Open VSX registry.
 
@@ -459,7 +463,7 @@ pulled a tag will not see it change. Then pass the image to `install.sh
 both modes. To try the image by hand:
 
     docker run --rm -e EP_PATH=/galaxy/interactivetool/ep/1/t -w /jobdir -v $PWD:/jobdir \
-        --user 10001:10001 -p 3000:3000 ksuderman/galaxy-vscode:1.105.1-9
+        --user 10001:10001 -p 3000:3000 ksuderman/galaxy-vscode:1.105.1-10
     # open http://localhost:3000/galaxy/interactivetool/ep/1/t/
     # domain mode: -e EP_PATH=/ and open http://localhost:3000/
 

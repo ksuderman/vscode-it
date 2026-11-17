@@ -1,4 +1,8 @@
 <tool id="interactive_tool_vscode" tool_type="interactive" name="VS Code" version="@TOOL_VERSION@" profile="23.0">
+    <!-- The Visual Studio Code icon, unmodified apart from scaling, from
+         https://code.visualstudio.com/brand. A trademark of Microsoft; see that
+         page for the terms of use. -->
+    <icon src="vscode.png"/>
     <description>Visual Studio Code in the browser</description>
     <macros>
         <import>macros.xml</import>
@@ -57,7 +61,7 @@
                help="Linked read-only under workspace/inputs/. Save anything you want back in Galaxy under workspace/outputs/."/>
         <param name="bucket" type="text" optional="true" value=""
                label="Google Cloud Storage bucket for Batch jobs"
-               help="Optional. Only needed to send work to Google Cloud Batch with the batch command; job files are kept under galaxy-vscode/batch/ in this bucket. Give the bucket name, with or without gs://.">
+               help="Optional, and only for Galaxy servers running on Google Cloud. Needed to send work to Google Cloud Batch with the batch command; job files are kept under galaxy-vscode/batch/ in this bucket. Give the bucket name, with or without gs://.">
             <validator type="regex" message="Enter a bucket name such as my-bucket or gs://my-bucket">^$|^(gs://)?[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]/?$</validator>
         </param>
     </inputs>
